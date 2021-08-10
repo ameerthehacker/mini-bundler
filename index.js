@@ -1,4 +1,6 @@
 import * as Babel from '@babel/standalone';
+import babelTraverse from '@babel/traverse';
+import * as BabelParser from '@babel/parser';
 import path from 'path';
 
 const files = {
@@ -22,6 +24,9 @@ const files = {
     content: `{
       "name": "ameer"
     }`
+  },
+  '/waste.js': {
+    content: `console.log('')`
   }
 }
 
@@ -45,32 +50,56 @@ function runCode(transpiledFiles, filePath) {
   return module.exports;
 }
 
-function run(files) {
-  const transpiledFiles = {};
+function buildDependencyGraph(files, entryPoint) {
+  const queue = [entryPoint];
+  const dependencyGraph = {};
 
-  for (const filePath in files) {
+  for (const filePath of queue) {
+    const fileContent = files[filePath].content;
+    const dependencies = [];
     const ext = path.extname(filePath);
 
     if (ext === '.js') {
       const transpiledCode = Babel.transform(files[filePath].content, { presets: ['env'] }).code;
+      const ast = BabelParser.parse(fileContent, { sourceType: 'module' });
 
-      transpiledFiles[filePath] = {
-        code: transpiledCode
+      babelTraverse(ast, {
+        ImportDeclaration: (importDeclaration) => {
+          dependencies.push(importDeclaration.node.source.value);
+        }
+      });
+
+      dependencyGraph[filePath] = {
+        code: transpiledCode,
+        dependencies
       }
     } else if (ext === '.json') {
       const transpiledCode = `
         module.exports = ${files[filePath].content};
       `
 
-      transpiledFiles[filePath] = {
-        code: transpiledCode
+      dependencyGraph[filePath] = {
+        code: transpiledCode,
+        dependencies: []
       }
     } else {
       throw new Error(`invalid file ${ext}`)
     }
+
+    const dirname = path.dirname(filePath);
+
+    const dependenciesInAbsolutePath = dependencies.map(relativeFilePath => path.resolve('/', dirname, relativeFilePath));
+
+    queue.push(...dependenciesInAbsolutePath);
   }
 
-  runCode(transpiledFiles, '/index.js');
+  return dependencyGraph;
+}
+
+function run(files) {
+  const depGraph = buildDependencyGraph(files, '/index.js');
+
+  runCode(depGraph, '/index.js');
 }
 
 run(files);
